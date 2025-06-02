@@ -221,18 +221,6 @@ python evaluate.py
 
 ---
 
-## Troubleshooting “No module named llm_clients”
-
-If you still encounter:
-```
-ModuleNotFoundError: No module named 'llm_clients'
-```
-1. Verify **folder name** is exactly `llm_clients` (all lowercase, underscore).  
-2. Check that `llm_clients/__init__.py` exists (it can be empty).  
-3. Confirm your **current working directory** when running code/tests is the project root (`RAI-Eval/`).  
-4. If using an IDE (e.g., VSCode), ensure the Python **workspace folder** is set to the project root so imports resolve properly.
-
----
 
 ## Attribution
 
