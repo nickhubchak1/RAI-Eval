@@ -1,7 +1,41 @@
-
 # RAI Eval
 
-This repository provides a structured evaluation framework for assessing Large Language Models (LLMs) in terms of fairness, robustness, and truthfulness. It includes a composite dataset drawn from multiple sources and supports automated evaluation across different model architectures.
+This repository provides a structured evaluation framework for automated benchmarking of large language models (LLMs) on Responsible AI dimensions. It integrates multiple datasets (TruthfulQA, BiasBench, WikiHow) and computes metrics for truthfulness, fairness, helpfulness, and toxicity. The latest version also supports local and cloud-hosted LLM clients, including Gemini, OpenAI, Anthropic, and HuggingFace-based models (e.g., LlaMA 2/3).
+
+---
+
+## Directory Structure
+
+```
+RAI-Eval/
+├── llm_clients/            # LLM client wrappers
+│   ├── __init__.py
+│   ├── openai_client.py
+│   ├── anthropic_client.py
+│   ├── gemini_client.py
+│   └── local_client.py
+├── scorers/                # Metric computation scripts
+│   ├── __init__.py
+│   ├── truthfulness.py
+│   ├── fairness.py
+│   ├── helpfulness.py
+│   └── toxicity.py
+├── utils/                  # I/O helpers
+│   ├── __init__.py
+│   └── io.py
+├── tests/                  # Pytest suite for client sanity checks
+│   └── test_llm_clients.py
+├── dataset_generator.py    # Aggregates and exports datasets to CSV
+├── evaluate.py             # Main evaluation pipeline
+├── config.py               # Configuration for API keys and feature flags
+├── README.md               # This file
+├── requirements.txt        # Python dependencies
+└── output/                 # Generated outputs (responses, metrics)
+    ├── responses/
+    └── metrics/
+```
+
+---
 
 ---
 
@@ -62,36 +96,141 @@ Measures consistency and equity in responses across different demographic groups
 
 ---
 
-## Feeding Prompts to Language Models
+## Installation
 
-Prompts from the combined dataset can be sent to any LLM. Example interface:
+1. **Clone or Download** this repository to your local machine.  
+2. **Navigate** to the project root:
+   ```bash
+   cd RAI-Eval
+   ```
+3. **Create a virtual environment** (recommended) and activate it:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate      # macOS/Linux
+   venv\Scripts\activate       # Windows PowerShell
+   ```
+4. **Install dependencies**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+---
+
+## Configuration
+
+Edit `config.py` or set environment variables for:
 
 ```python
-for prompt in df['prompt_text']:
-    response = call_model(prompt, model="gpt-4")
-    evaluate_response(prompt, response)
+# config.py
+
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL      = os.getenv("GEMINI_MODEL", "chat-bison-001")
+
+USE_LOCAL_MODELS = os.getenv("USE_LOCAL_MODELS", "false").lower() == "true"
+LOG_LEVEL        = os.getenv("LOG_LEVEL", "INFO")
 ```
 
-This framework is model-agnostic and can support:
-- OpenAI models (e.g., GPT-3.5, GPT-4)
-- Anthropic (Claude)
-- Open-weight models (LLaMA, Mistral, Falcon)
+- **OpenAI**: `export OPENAI_API_KEY="sk-..."`
+- **Anthropic**: `export ANTHROPIC_API_KEY="sk-..."`
+- **Gemini**: Acquire a Google Cloud OAuth 2.0 token (e.g., `gcloud auth application-default print-access-token`), then:
+  ```bash
+  export GEMINI_API_KEY="ya29...your-token..."
+  export GEMINI_MODEL="chat-bison-001"
+  ```
+- **Local Models**: To enable, run:
+  ```bash
+  export USE_LOCAL_MODELS="true"
+  # For HuggingFace downloads, set:
+  export HUGGINGFACEHUB_API_TOKEN="hf_your_token"
+  ```
 
 ---
 
-## Repository Structure
+## Running Tests
 
-- `dataset_generator.py`: Aggregates TruthfulQA, BiasBench, and WikiHow prompts into a single dataset  
-- `rai_combined_dataset.csv`: Unified dataset with consistent schema  
-- `README.md`: Documentation and evaluation guide  
+Before running the full evaluation, verify that each client responds:
+
+```bash
+pytest --maxfail=1 -q tests/test_llm_clients.py
+```
+
+You should see tests for:
+- `query_openai(...)`
+- `query_claude(...)`
+- `query_gemini(...)`
+- `query_local_model(...)` (skipped if `USE_LOCAL_MODELS=False`)
+
+If any test fails (e.g., missing API key or model download issues), fix the corresponding configuration before proceeding.
 
 ---
 
-## Future Work
+## Generating Your Dataset
 
-- Expand to include transparency/explainability scoring  
-- Integrate multi-turn dialogue evaluation  
-- Log performance, latency, and cost per model evaluation  
+If you haven’t yet built the combined dataset CSV:
+
+```bash
+python dataset_generator.py
+```
+
+This script:
+1. Loads **TruthfulQA** via HuggingFace Datasets.
+2. Loads **BBQ/BiasBench** (if available) from HuggingFace.
+3. Optionally scrapes **WikiHow** via Selenium (requires ChromeDriver).
+
+It outputs:
+```
+rai_dataset_output/rai_combined_dataset.csv
+```
+
+---
+
+## Running the Evaluation Pipeline
+
+Execute the main evaluation to generate responses and metrics:
+
+```bash
+python evaluate.py
+```
+
+- Progress and debug logs are written to `eval.log`.
+- Intermediate prompt→response JSONs are saved to `output/responses/{model}_responses.json`.
+- Final metrics CSV is written to `output/metrics/evaluation_results.csv`.
+
+---
+
+## Code Overview
+
+### `llm_clients/`
+- **`openai_client.py`**: `query_openai(prompt, model, max_retries)`  
+- **`anthropic_client.py`**: `query_claude(prompt, model, max_retries)`  
+- **`gemini_client.py`**: `query_gemini(prompt, model, max_retries)`  
+- **`local_client.py`**: `query_local_model(prompt, model_key, max_new_tokens)`
+
+### `scorers/`
+- **`truthfulness.py`**: Computes cosine similarity against ground truth.  
+- **`fairness.py`**: Calculates group accuracies and computes fairness gap.  
+- **`helpfulness.py`**: Uses OpenAI to rate responses on a 1–5 scale.  
+- **`toxicity.py`**: Uses Detoxify to assign toxicity scores.
+
+### `utils/io.py`
+- **`load_dataset(path)`**: Reads a CSV into a DataFrame.  
+- **`save_json(data, path)`**: Writes Python objects as pretty JSON.
+
+---
+
+## Troubleshooting “No module named llm_clients”
+
+If you still encounter:
+```
+ModuleNotFoundError: No module named 'llm_clients'
+```
+1. Verify **folder name** is exactly `llm_clients` (all lowercase, underscore).  
+2. Check that `llm_clients/__init__.py` exists (it can be empty).  
+3. Confirm your **current working directory** when running code/tests is the project root (`RAI-Eval/`).  
+4. If using an IDE (e.g., VSCode), ensure the Python **workspace folder** is set to the project root so imports resolve properly.
 
 ---
 
@@ -111,3 +250,5 @@ For questions or contributions, please open an issue on this repository.
 This framework is inspired in part by the principles outlined in the research on Responsible AI Games and Ensembles, which emphasizes structured evaluation of fairness, robustness, and transparency in machine learning systems.
 
 For more details, refer to the original paper: [Responsible AI Games and Ensembles](https://arxiv.org/abs/2302.12254)
+
+**Happy benchmarking!**

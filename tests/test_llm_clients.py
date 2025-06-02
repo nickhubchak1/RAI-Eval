@@ -5,7 +5,7 @@ import pytest
 
 from llm_clients.openai_client   import query_openai
 from llm_clients.anthropic_client import query_claude
-from llm_clients.gemini_client   import query_gemini
+from llm_clients.gemini_client  import query_gemini
 from llm_clients.local_client    import query_local_model
 from config import USE_LOCAL_MODELS
 

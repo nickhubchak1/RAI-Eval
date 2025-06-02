@@ -20,12 +20,14 @@ def query_openai(prompt: str, model: str = "gpt-4", max_retries: int = 3) -> str
     while retries < max_retries:
         try:
             logging.debug(f"[OpenAI] Attempt {retries + 1} using model {model!r}")
-            response = openai.ChatCompletion.create(
+            response = openai.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=512,
             )
+            # In openai>=1.0.0, the structure is:
+            # response.choices[0].message.content
             text = response.choices[0].message.content.strip()
             logging.debug(f"[OpenAI] Received response: {text[:50]}…")
             return text
