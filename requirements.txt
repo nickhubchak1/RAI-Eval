@@ -1,0 +1,23 @@
+# === requirements.txt ===
+
+# Core
+pandas
+sentence-transformers
+datasets
+beautifulsoup4
+selenium
+requests
+
+# LLM Clients
+openai
+anthropic
+transformers
+torch
+google-auth           # if you need direct oauth for Gemini
+# or: google-generativeai
+
+# Scorers
+detoxify
+
+# Testing
+pytest

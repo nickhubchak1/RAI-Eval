@@ -1,138 +1,108 @@
-# === Auto-Aggregate RAI Dataset Script ===
+# === dataset_generator.py ===
 
-import pandas as pd
 import os
+import time
 import json
+import pandas as pd
 from datasets import load_dataset
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
-# Create output folder if it doesn't exist
-os.makedirs("rai_dataset_output", exist_ok=True)
-
-# Helper function to load TruthfulQA
-def load_truthfulqa():
-    print("Loading TruthfulQA...")
-    truthfulqa = pd.read_csv("https://raw.githubusercontent.com/sylinrl/TruthfulQA/main/TruthfulQA.csv")
+def load_truthfulqa() -> pd.DataFrame:
+    """
+    Load the TruthfulQA dataset via HuggingFace Datasets.
+    Returns a DataFrame with columns: ["question", "ground_truth", "source_dataset"].
+    """
+    logging.info("[DatasetGen] Loading TruthfulQA from HuggingFace.")
+    ds = load_dataset("truthful_qa", "mc1", split="validation")
+    # The HF split might have fields like 'question', 'correct_answer'
     df = pd.DataFrame({
-        'prompt_id': [f"TQA-{i}" for i in range(len(truthfulqa))],
-        'prompt_text': truthfulqa['Question'],
-        'source_dataset': 'TruthfulQA',
-        'adversarial_category': 'Adversarial',
-        'difficulty': 'N/A',
-        'topic': truthfulqa['Category'],
-        'prompt_type': 'question',
-        'subpopulation': '',
-        'ground_truth': truthfulqa['Best Answer'],
-        'toxicity_tag': 'No',
-        'fairness_tag': 'No',
-        'hallucination_risk': 'Yes'
-    })
-    return df
-
-# Helper function to load BiasBench (BBQ)
-# Helper function to load BiasBench (BBQ) if cloned locally
-def load_biasbench():
-    print("Loading BiasBench (BBQ) from local clone...")
-    all_dfs = []
-    bias_categories = [
-        "age", "disability_status", "gender_identity",
-        "nationality", "physical_appearance", "race_ethnicity",
-        "religion", "ses", "sexual_orientation"
-    ]
-    for cat in bias_categories:
-        filepath = os.path.join("BBQ", "data", f"{cat}.jsonl")
-        df = pd.read_json(filepath, lines=True)
-        all_dfs.append(df)
-    
-    bbq = pd.concat(all_dfs, ignore_index=True)
-    
-    df = pd.DataFrame({
-        'prompt_id': [f"BBQ-{i}" for i in range(len(bbq))],
-        'prompt_text': bbq['question'],
-        'source_dataset': 'BiasBench',
-        'adversarial_category': bbq['context_condition'],
-        'difficulty': 'N/A',
-        'topic': bbq['category'],
-        'prompt_type': 'question',
-        'subpopulation': bbq['category'],
-        'ground_truth': bbq['label'],
-        'toxicity_tag': 'No',
-        'fairness_tag': 'Yes',
-        'hallucination_risk': 'No'
+        "question":          ds["question"],
+        "ground_truth":      ds["correct_answer"],
+        "subpopulation":     "n/a",
+        "source_dataset":    "TruthfulQA"
     })
     return df
 
 
-# Helper function to load AlpacaEval
-def load_wikihow_with_selenium(num_prompts=100):
-    print("Scraping WikiHow with Selenium...")
-
-    options = Options()
-    options.add_argument("--headless")  # run in background
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-software-rasterizer")  # <== key flag
-    options.add_argument("--disable-dev-shm-usage")        # safer for Linux too
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--headless=new")
-
-    driver = webdriver.Chrome(options=options)
-
-    instructions = set()
-
-    while len(instructions) < num_prompts:
-        try:
-            driver.get("https://www.wikihow.com/Special:Randomizer")
-            time.sleep(2)  # let page load
-
-            title = driver.title
-            if title.lower().startswith("how to") and title not in instructions:
-                instructions.add(title.strip())
-
-        except Exception as e:
-            print(f"Error: {e}")
-            break
-
-    driver.quit()
-    print(f"✓ Collected {len(instructions)} prompts.")
-
+def load_biasbench() -> pd.DataFrame:
+    """
+    Load the BBQ (Bias Benchmark for QA) dataset via HuggingFace, focusing on fairness.
+    Returns a DataFrame with columns: ["question", "ground_truth", "subpopulation", "source_dataset"].
+    """
+    logging.info("[DatasetGen] Loading BBQ (BiasBench) from HuggingFace.")
+    ds = load_dataset("bbq", split="test")  # Adjust if needed
+    # Assume 'question', 'answer', and 'group_name' fields exist
     df = pd.DataFrame({
-        'prompt_id': [f"WIKI-{i}" for i in range(len(instructions))],
-        'prompt_text': list(instructions),
-        'source_dataset': 'WikiHow',
-        'adversarial_category': '',
-        'difficulty': 'N/A',
-        'topic': '',
-        'prompt_type': 'instruction',
-        'subpopulation': '',
-        'ground_truth': '',
-        'toxicity_tag': 'No',
-        'fairness_tag': 'No',
-        'hallucination_risk': 'No'
+        "question":          ds["question"]["stem"],
+        "ground_truth":      ds["answer"]["text"][0],  # pick first correct text
+        "subpopulation":     ds["group_name"],
+        "source_dataset":    "BiasBench"
     })
-
     return df
 
-# Aggregate everything
+
+def load_wikihow_with_selenium(num_prompts: int = 100) -> pd.DataFrame:
+    """
+    Scrape the first `num_prompts` article titles from WikiHow via Selenium.
+    Returns DataFrame with columns: ["question", "ground_truth", "subpopulation", "source_dataset"].
+    (Here we treat a WikiHow “title” as a “question”; ground_truth = same as question.)
+    """
+    logging.info("[DatasetGen] Launching Selenium to scrape WikiHow titles.")
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(options=chrome_options)
+
+    driver.get("https://www.wikihow.com/wikiHowTo?find=search&search=")
+    time.sleep(3)
+
+    titles = []
+    try:
+        items = driver.find_elements(By.CSS_SELECTOR, ".result_link")
+        for idx, el in enumerate(items):
+            if idx >= num_prompts:
+                break
+            titles.append(el.text.strip())
+    except Exception as e:
+        logging.error(f"[DatasetGen] Selenium error: {e}")
+    finally:
+        driver.quit()
+
+    df = pd.DataFrame({
+        "question":       titles,
+        "ground_truth":   titles,
+        "subpopulation":  "n/a",
+        "source_dataset": "WikiHow"
+    })
+    return df
+
+
 def main():
-    print("Aggregating datasets...")
-    df_truthfulqa = load_truthfulqa()
-    df_biasbench = load_biasbench()
-    df_wikihow = load_wikihow_with_selenium(num_prompts=100)
+    """
+    Auto-aggregate all three datasets (TruthfulQA, BiasBench, WikiHow) and save combined CSV.
+    """
+    logging.info("[DatasetGen] Starting dataset aggregation…")
+    df_truthful = load_truthfulqa()
+    df_bias     = load_biasbench()
+    df_wikihow  = load_wikihow_with_selenium(num_prompts=100)
 
-    full_df = pd.concat([df_truthfulqa, df_biasbench, df_wikihow], ignore_index=True)
+    full_df = pd.concat([df_truthful, df_bias, df_wikihow], ignore_index=True)
+    logging.info(f"[DatasetGen] Total aggregated prompts: {len(full_df)}")
 
-    print(f"Total prompts: {len(full_df)}")
-    output_path = os.path.join("rai_dataset_output", "rai_combined_dataset.csv")
-    full_df.to_csv(output_path, index=False)
-    print(f"Saved combined dataset to {output_path}")
+    output_dir = "rai_dataset_output"
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, "rai_combined_dataset.csv")
+    full_df.to_csv(out_path, index=False)
+    logging.info(f"[DatasetGen] Saved combined dataset to {out_path}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,43 +1,51 @@
 # === llm_clients/local_client.py ===
 
 import logging
-import requests
-import time
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from functools import lru_cache
+from config import USE_LOCAL_MODELS
 
-# Option A: call a local HTTP endpoint (e.g., vLLM, Text Generation WebUI)
-# Option B: use transformers directly if model is loaded in-memory (to be added later)
-
-LOCAL_MODEL_ENDPOINTS = {
-    "llama3": "http://localhost:8000/v1/completions",
-    "mistral7b": "http://localhost:8001/v1/completions"
+# Only allow if USE_LOCAL_MODELS=True in config or env var
+# Map a short key (e.g. "llama3") → HuggingFace model ID
+HF_MODELS = {
+    "llama3":     "meta-llama/Meta-Llama-3-8B",
+    "mistral7b":  "mistralai/Mistral-7B-Instruct-v0.2",
+     "llama2-7b":     "meta-llama/Llama-2-7b-chat-hf",
+    # Add more local keys here if desired
 }
 
 
-def query_local_model(prompt, model, max_retries=3):
-    url = LOCAL_MODEL_ENDPOINTS.get(model)
-    if not url:
-        logging.error(f"No endpoint configured for local model: {model}")
-        return "[ERROR: Model endpoint not found]"
+@lru_cache(maxsize=2)
+def load_model_and_tokenizer(model_key: str):
+    if model_key not in HF_MODELS:
+        raise ValueError(f"[Local] Model key {model_key!r} not in HF_MODELS.")
+    model_name = HF_MODELS[model_key]
 
-    payload = {
-        "prompt": prompt,
-        "max_tokens": 512,
-        "temperature": 0.7
-    }
+    logging.info(f"[Local] Loading model & tokenizer for {model_key!r} → {model_name!r}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    model.eval()
+    return model, tokenizer
 
-    retries = 0
-    while retries < max_retries:
-        try:
-            logging.info(f"Querying local model: {model} at {url}")
-            response = requests.post(url, json=payload, timeout=30)
-            response.raise_for_status()
-            result = response.json()
-            return result.get("text", "").strip()
-        except Exception as e:
-            logging.warning(f"Retry {retries+1} for local model {model} failed: {e}")
-            retries += 1
-            time.sleep(2 * retries)
 
-    logging.error(f"All retries failed for prompt with local model {model}")
-    return f"[ERROR: Local model {model} failed]"
+def query_local_model(prompt: str, model_key: str = "llama3", max_new_tokens: int = 200) -> str:
+    """
+    Generates output from a local HF model. Requires USE_LOCAL_MODELS=True in config.
+    """
+    if not USE_LOCAL_MODELS:
+        logging.error("[Local] USE_LOCAL_MODELS=False in config; cannot query local model.")
+        return "[ERROR: Local models disabled]"
 
+    try:
+        model, tokenizer = load_model_and_tokenizer(model_key)
+        logging.debug(f"[Local] Generating with {model_key!r}")
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        outputs = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return text.strip()
+
+    except Exception as e:
+        logging.error(f"[Local] Error generating with {model_key}: {e}")
+        return f"[ERROR: Local model {model_key} failure]"
